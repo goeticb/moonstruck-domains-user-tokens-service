@@ -4,8 +4,15 @@ const { default: Moralis } = require('moralis');
 const { EvmChain } = require('@moralisweb3/evm-utils');
 const { readFileSync } = require('fs');
 const { join } = require('path');
+const { default: helmet } = require('helmet');
+const ExpressBrute = require('express-brute');
+
+const store = new ExpressBrute.MemoryStore(); // stores state locally, don't use this in production
+const bruteforce = new ExpressBrute(store);
 
 const app = express();
+app.use(helmet());
+
 const registryABI = JSON.parse(readFileSync(join(__dirname, '/contracts/Registry.json'), 'utf-8'));
 const REGISTRY_ADDRESS = '0x80f6B4d8fd67431D19EC9509f03F99eF9053e203';
 
@@ -13,7 +20,7 @@ Moralis.start({
     apiKey: process.env.MORALIS_API_KEY,
 });
 
-app.get('/tokens', async (req, res) => {
+app.get('/tokens', bruteforce.prevent, async (req, res) => {
     const myAddress = req.query.address;
 
     if (myAddress == undefined) {
