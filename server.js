@@ -7,6 +7,15 @@ const { join } = require('path');
 const { default: helmet } = require('helmet');
 const ExpressBrute = require('express-brute');
 const compression = require('compression');
+const { createClient } = require('redis');
+
+const client = createClient({
+    url: process.env.REDIS_URL,
+    password: process.env.REDIS_PASSWORD,
+    name: process.env.REDIS_DATABASE_NAME,
+});
+
+client.on('error', (err) => console.log('Redis Client Error', err));
 
 const store = new ExpressBrute.MemoryStore();
 const bruteforce = new ExpressBrute(store);
@@ -50,21 +59,23 @@ Moralis.start({
 registryMumbai.on('newSubRegistry', (newSubRegistryAddress) => {
     const subRegistry = new ethers.Contract(newSubRegistryAddress, subRegistryABI.abi, new ethers.providers.JsonRpcProvider('https://rpc-mumbai.maticvigil.com/'));
 
-    subRegistry.on('newTokenOwner', async (from, to, tokenURI) => {
+    subRegistry.on('newTokenOwner', async (from, to, tokenId) => {
         let recieverTokens = dataMumbai.get(to);
         if (recieverTokens == undefined) recieverTokens = [];
         else recieverTokens = Array.from(recieverTokens);
 
-        recieverTokens.push(tokenURI);
-        dataMumbai.set(to, recieverTokens);
+        recieverTokens.push(tokenId);
+        dataMumbai.set(`${to.slice(2)}-${subRegistry.address.slice(2)}`, recieverTokens);
+        await client.set(`${to.slice(2)}-${subRegistry.address.slice(2)}`, recieverTokens);
 
         if (from != '0x0000000000000000000000000000000000000000') {
             let senderTokens = dataMumbai.get(from);
             if (senderTokens == undefined) senderTokens = [];
             else senderTokens = Array.from(senderTokens);
 
-            senderTokens.splice(senderTokens.indexOf(tokenURI), 1);
-            dataMumbai.set(from, senderTokens);
+            senderTokens.splice(senderTokens.indexOf(tokenId), 1);
+            dataMumbai.set(`${from.slice(2)}-${subRegistry.address.slice(2)}`, senderTokens);
+            await client.set(`${from.slice(2)}-${subRegistry.address.slice(2)}`, senderTokens);
         }
     })
 
@@ -82,10 +93,23 @@ app.get('/tokens/:address', bruteforce.prevent, async (req, res) => {
     else if (network == 'mainnet') contract = dataMainnet;
     else return res.status(400).send('invalid network')
 
-    res.send(data.get(address.toLowerCase()));
+    let myResponse = {};
+    for (let i = 0; i < subRegistryContracts.length; i++) {
+        let value = await client.get(`${address.toLowerCase().slice(2)}-${subRegistryContracts[i].address.toLowerCase().slice(2)}`);
+
+        if (value != null && value != '[]') {
+            value = JSON.parse(value);
+            myResponse[subRegistryContracts[i].address] = value;
+        }
+
+    }
+    res.send(myResponse);
 })
 
 app.listen('8080', async () => {
+    await client.connect();
+
+    const nextBlock = parseInt(await client.get('max_block'));
     let subRegistryAddressesMumbai = [];
     const topLevelDomains = await registryMumbai.getTopLevelDomains();
 
@@ -100,21 +124,25 @@ app.listen('8080', async () => {
     for (i = 0; i < subRegistryAddressesMumbai.length; i++) {
         const subRegistry = new ethers.Contract(subRegistryAddressesMumbai[i], subRegistryABI.abi, new ethers.providers.JsonRpcProvider('https://rpc-mumbai.maticvigil.com/'));
 
-        subRegistry.on('newTokenOwner', async (from, to, tokenURI) => {
-            let recieverTokens = dataMumbai.get(to);
+        subRegistry.on('newTokenOwner', async (from, to, tokenId) => {
+            let recieverTokens = await client.get(`${to.toLowerCase().slice(2)}-${subRegistry.address.toLowerCase().slice(2)}`);
+            recieverTokens = JSON.parse(recieverTokens);
+
             if (recieverTokens == undefined) recieverTokens = [];
             else recieverTokens = Array.from(recieverTokens);
 
-            recieverTokens.push(tokenURI);
-            dataMumbai.set(to, recieverTokens);
+            recieverTokens.push(tokenId);
+            await client.set(`${to.slice(2)}-${subRegistry.address.slice(2)}`, recieverTokens);
 
             if (from != '0x0000000000000000000000000000000000000000') {
-                let senderTokens = dataMumbai.get(from);
+                let senderTokens = await client.get(`${from.toLowerCase().slice(2)}-${subRegistry.address.toLowerCase().slice(2)}`);
+                senderTokens = JSON.parse(senderTokens);
+
                 if (senderTokens == undefined) senderTokens = [];
                 else senderTokens = Array.from(senderTokens);
 
-                senderTokens.splice(senderTokens.indexOf(tokenURI), 1);
-                dataMumbai.set(from, senderTokens);
+                senderTokens.splice(senderTokens.indexOf(tokenId), 1);
+                await client.set(`${from.slice(2)}-${subRegistry.address.slice(2)}`, senderTokens);
             }
         })
 
@@ -123,52 +151,62 @@ app.listen('8080', async () => {
         const response = await Moralis.EvmApi.events.getContractEvents({
             address: subRegistryAddressesMumbai[i],
             chain: EvmChain.MUMBAI,
+            fromBlock: nextBlock,
             abi: {
                 "anonymous": false,
                 "inputs": [
                     {
-                        "indexed": false,
+                        "indexed": true,
                         "internalType": "address",
                         "name": "from",
                         "type": "address"
                     },
                     {
-                        "indexed": false,
+                        "indexed": true,
                         "internalType": "address",
                         "name": "to",
                         "type": "address"
                     },
                     {
-                        "indexed": false,
-                        "internalType": "string",
-                        "name": "tokenURI",
-                        "type": "string"
+                        "indexed": true,
+                        "internalType": "uint256",
+                        "name": "tokenId",
+                        "type": "uint256"
                     }
                 ],
-                "name": "newTokenOwner",
+                "name": "Transfer",
                 "type": "event"
             },
-            topic: '0xd5e6d26e46c1b4a57e0f23e05f934fd3ed3c2c8ff2a3564ddba5303692d9deed'
+            topic: '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
         });
 
         let tmp = Array.from(response.raw.result);
 
         if (tmp[0] != undefined) {
             for (let j = tmp.length - 1; j >= 0; j--) {
-                let recieverTokens = dataMumbai.get(tmp[j].data.to);
+                const maxBlock = parseInt(await client.get('max_block'));
+                if (maxBlock < tmp[j].block_number) await client.set('max_block', tmp[j].block_number + 1);
+
+                let recieverTokens = await client.get(`${tmp[j].data.to.toLowerCase().slice(2)}-${tmp[j].address.toLowerCase().slice(2)}`);
+                recieverTokens = JSON.parse(recieverTokens);
+
                 if (recieverTokens == undefined) recieverTokens = [];
                 else recieverTokens = Array.from(recieverTokens);
 
-                recieverTokens.push(tmp[j].data.tokenURI);
-                dataMumbai.set(tmp[j].data.to, recieverTokens);
+                recieverTokens.push(tmp[j].data.tokenId);
+
+                await client.set(`${tmp[j].data.to.slice(2)}-${tmp[j].address.slice(2)}`, JSON.stringify(recieverTokens));
 
                 if (tmp[j].data.from != '0x0000000000000000000000000000000000000000') {
-                    let senderTokens = dataMumbai.get(tmp[j].data.from);
+                    let senderTokens = await client.get(`${tmp[j].data.from.toLowerCase().slice(2)}-${tmp[j].address.toLowerCase().slice(2)}`);
+                    senderTokens = JSON.parse(senderTokens);
+
                     if (senderTokens == undefined) senderTokens = [];
                     else senderTokens = Array.from(senderTokens);
 
-                    senderTokens.splice(senderTokens.indexOf(tmp[j].data.tokenURI), 1);
-                    dataMumbai.set(tmp[j].data.from, senderTokens);
+                    senderTokens.splice(senderTokens.indexOf(tmp[j].data.tokenId), 1);
+
+                    await client.set(`${tmp[j].data.from.slice(2)}-${tmp[j].address.slice(2)}`, JSON.stringify(senderTokens));
                 }
             }
         }
