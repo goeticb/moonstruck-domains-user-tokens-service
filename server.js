@@ -1,4 +1,4 @@
-const { ethers } = require('ethers');
+const { ethers, BigNumber } = require('ethers');
 const express = require('express');
 const { default: Moralis } = require('moralis');
 const { EvmChain } = require('@moralisweb3/evm-utils');
@@ -59,23 +59,31 @@ Moralis.start({
 registryMumbai.on('newSubRegistry', (newSubRegistryAddress) => {
     const subRegistry = new ethers.Contract(newSubRegistryAddress, subRegistryABI.abi, new ethers.providers.JsonRpcProvider('https://rpc-mumbai.maticvigil.com/'));
 
-    subRegistry.on('newTokenOwner', async (from, to, tokenId) => {
-        let recieverTokens = dataMumbai.get(to);
+    subRegistry.on('Transfer', async (from, to, tokenId) => {
+        const blockNumber = await subRegistry.provider.getBlockNumber();
+        await client.set('max_block', blockNumber + 1);
+
+        let recieverTokens = await client.get(`${to.toLowerCase().slice(2)}-${subRegistry.address.toLowerCase().slice(2)}`);
+
+        recieverTokens = JSON.parse(recieverTokens);
+
         if (recieverTokens == undefined) recieverTokens = [];
         else recieverTokens = Array.from(recieverTokens);
 
-        recieverTokens.push(tokenId);
-        dataMumbai.set(`${to.slice(2)}-${subRegistry.address.slice(2)}`, recieverTokens);
-        await client.set(`${to.slice(2)}-${subRegistry.address.slice(2)}`, recieverTokens);
+        recieverTokens.push(BigNumber.from(tokenId).toString());
+
+        await client.set(`${to.toLowerCase().slice(2)}-${subRegistry.address.toLowerCase().slice(2)}`, JSON.stringify(recieverTokens));
 
         if (from != '0x0000000000000000000000000000000000000000') {
-            let senderTokens = dataMumbai.get(from);
+            let senderTokens = await client.get(`${from.toLowerCase().slice(2)}-${subRegistry.address.toLowerCase().slice(2)}`);
+            senderTokens = JSON.parse(senderTokens);
+
             if (senderTokens == undefined) senderTokens = [];
             else senderTokens = Array.from(senderTokens);
 
-            senderTokens.splice(senderTokens.indexOf(tokenId), 1);
-            dataMumbai.set(`${from.slice(2)}-${subRegistry.address.slice(2)}`, senderTokens);
-            await client.set(`${from.slice(2)}-${subRegistry.address.slice(2)}`, senderTokens);
+            senderTokens.splice(senderTokens.indexOf(tokenId.toString()), 1);
+
+            await client.set(`${from.toLowerCase().slice(2)}-${subRegistry.address.toLowerCase().slice(2)}`, JSON.stringify(senderTokens));
         }
     })
 
@@ -124,15 +132,20 @@ app.listen('8080', async () => {
     for (i = 0; i < subRegistryAddressesMumbai.length; i++) {
         const subRegistry = new ethers.Contract(subRegistryAddressesMumbai[i], subRegistryABI.abi, new ethers.providers.JsonRpcProvider('https://rpc-mumbai.maticvigil.com/'));
 
-        subRegistry.on('newTokenOwner', async (from, to, tokenId) => {
+        subRegistry.on('Transfer', async (from, to, tokenId) => {
+            const blockNumber = await subRegistry.provider.getBlockNumber();
+            await client.set('max_block', blockNumber + 1);
+
             let recieverTokens = await client.get(`${to.toLowerCase().slice(2)}-${subRegistry.address.toLowerCase().slice(2)}`);
+
             recieverTokens = JSON.parse(recieverTokens);
 
             if (recieverTokens == undefined) recieverTokens = [];
             else recieverTokens = Array.from(recieverTokens);
 
-            recieverTokens.push(tokenId);
-            await client.set(`${to.slice(2)}-${subRegistry.address.slice(2)}`, recieverTokens);
+            recieverTokens.push(BigNumber.from(tokenId).toString());
+
+            await client.set(`${to.toLowerCase().slice(2)}-${subRegistry.address.toLowerCase().slice(2)}`, JSON.stringify(recieverTokens));
 
             if (from != '0x0000000000000000000000000000000000000000') {
                 let senderTokens = await client.get(`${from.toLowerCase().slice(2)}-${subRegistry.address.toLowerCase().slice(2)}`);
@@ -141,8 +154,9 @@ app.listen('8080', async () => {
                 if (senderTokens == undefined) senderTokens = [];
                 else senderTokens = Array.from(senderTokens);
 
-                senderTokens.splice(senderTokens.indexOf(tokenId), 1);
-                await client.set(`${from.slice(2)}-${subRegistry.address.slice(2)}`, senderTokens);
+                senderTokens.splice(senderTokens.indexOf(tokenId.toString()), 1);
+
+                await client.set(`${from.toLowerCase().slice(2)}-${subRegistry.address.toLowerCase().slice(2)}`, JSON.stringify(senderTokens));
             }
         })
 
@@ -185,7 +199,7 @@ app.listen('8080', async () => {
         if (tmp[0] != undefined) {
             for (let j = tmp.length - 1; j >= 0; j--) {
                 const maxBlock = parseInt(await client.get('max_block'));
-                if (maxBlock < tmp[j].block_number) await client.set('max_block', tmp[j].block_number + 1);
+                if (maxBlock < tmp[j].block_number) await client.set('max_block', parseInt(tmp[j].block_number) + 1);
 
                 let recieverTokens = await client.get(`${tmp[j].data.to.toLowerCase().slice(2)}-${tmp[j].address.toLowerCase().slice(2)}`);
                 recieverTokens = JSON.parse(recieverTokens);
