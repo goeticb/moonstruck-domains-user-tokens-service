@@ -114,6 +114,49 @@ app.get('/tokens/:address', bruteforce.prevent, async (req, res) => {
     res.send(myResponse);
 })
 
+app.get('/records/:address', async (req, res) => {
+    const { address } = req.params;
+
+    const response = await Moralis.EvmApi.events.getContractEvents({
+        address: address,
+        chain: EvmChain.MUMBAI,
+        abi: {
+            "anonymous": false,
+            "inputs": [
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "_type",
+                    "type": "uint256"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "string",
+                    "name": "key",
+                    "type": "string"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "bytes",
+                    "name": "value",
+                    "type": "bytes"
+                }
+            ],
+            "name": "RecordSet",
+            "type": "event"
+        },
+        topic: '0x9551980f56ab4a38eeda798fa201134d95d98db4d3ad60d8ce7b9a29f3681cb7'
+    });
+
+    let data = new Map();
+    let tmp = Array.from(response.raw.result);
+
+    for (let i = tmp.length-1; i>=0; i--) data.set(`${tmp[i].data._type} + ${tmp[i].data.key}`, tmp[i].data.value);
+
+    let myResponse = Object.fromEntries(data);
+    res.send(myResponse);
+})
+
 app.listen('8080', async () => {
     await client.connect();
 
@@ -225,6 +268,7 @@ app.listen('8080', async () => {
             }
         }
     }
+
     console.log('server initialized');
 });
 
