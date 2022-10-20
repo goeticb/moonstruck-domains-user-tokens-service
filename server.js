@@ -116,10 +116,18 @@ app.get('/tokens/:address', bruteforce.prevent, async (req, res) => {
 
 app.get('/records/:address', async (req, res) => {
     const { address } = req.params;
+    const { network } = req.query;
+    let chain;
+
+    if (!ethers.utils.isAddress(address) || address == undefined) return res.status(400).send('invalid address');
+
+    if (network == 'mumbai') chain = EvmChain.MUMBAI;
+    else if (network == 'mainnet') chain = EvmChain.POLYGON;
+    else return res.status(400).send('invalid network');
 
     const response = await Moralis.EvmApi.events.getContractEvents({
         address: address,
-        chain: EvmChain.MUMBAI,
+        chain: chain,
         abi: {
             "anonymous": false,
             "inputs": [
@@ -151,7 +159,7 @@ app.get('/records/:address', async (req, res) => {
     let data = new Map();
     let tmp = Array.from(response.raw.result);
 
-    for (let i = tmp.length-1; i>=0; i--) data.set(`${tmp[i].data._type} + ${tmp[i].data.key}`, tmp[i].data.value);
+    for (let i = tmp.length - 1; i >= 0; i--) data.set(`${tmp[i].data._type} + ${tmp[i].data.key}`, tmp[i].data.value);
 
     let myResponse = Object.fromEntries(data);
     res.send(myResponse);
