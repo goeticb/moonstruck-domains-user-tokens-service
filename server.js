@@ -8,6 +8,7 @@ const { default: helmet } = require('helmet');
 const ExpressBrute = require('express-brute');
 const compression = require('compression');
 const { createClient } = require('redis');
+const cors = require('cors');
 
 const client = createClient({
     url: process.env.REDIS_URL,
@@ -22,11 +23,11 @@ const bruteforce = new ExpressBrute(store);
 
 const app = express();
 app.use(helmet.contentSecurityPolicy());
-// app.use(
-//     cors({
-//         origin: "*",
-//     })
-// );
+app.use(
+    cors({
+        origin: "*",
+    })
+);
 app.use(helmet.dnsPrefetchControl());
 app.use(helmet.expectCt());
 app.use(helmet.frameguard());
@@ -90,7 +91,7 @@ registryMumbai.on('newSubRegistry', (newSubRegistryAddress) => {
     subRegistryContracts.push(subRegistry);
 })
 
-app.get('/tokens/:address', bruteforce.prevent, async (req, res) => {
+app.get('/tokens/:address', /*bruteforce.prevent,*/ async (req, res) => {
     const { address } = req.params;
     const { network } = req.query;
     let data;
