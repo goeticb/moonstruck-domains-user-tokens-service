@@ -4,7 +4,7 @@ const { default: Moralis } = require('moralis');
 const { EvmChain } = require('@moralisweb3/evm-utils');
 const { readFileSync } = require('fs');
 const { join } = require('path');
-const { default: helmet } = require('helmet');
+const helmet = require('helmet');
 const ExpressBrute = require('express-brute');
 const compression = require('compression');
 const { createClient } = require('redis');
@@ -43,8 +43,17 @@ app.use(compression());
 
 const registryABI = JSON.parse(readFileSync(join(__dirname, '/contracts/Registry.json'), 'utf-8'));
 const subRegistryABI = JSON.parse(readFileSync(join(__dirname, '/contracts/SubRegistry.json'), 'utf-8'));
-const REGISTRY_ADDRESS_MUMBAI = '0xB54f8F785907740bDDebF0c6204d288c4836b9f5';
+const REGISTRY_ADDRESS_MUMBAI = process.env.REGISTRY_ADDRESS_MUMBAI;
 const REGISTRY_ADDRESS_MAINNET = '';
+const resolverABI = Array.from(JSON.parse(readFileSync(join(__dirname, '/contracts/Resolver.json'), 'utf-8')).abi);
+
+const recordSetEventABI = resolverABI.filter((tmp)=>{
+    return tmp.name =='RecordSet';
+})[0];
+const transferEventABI = Array.from(subRegistryABI.abi).filter((tmp)=>{
+    return tmp.name =='Transfer';
+})[0];
+
 
 const registryMumbai = new ethers.Contract(REGISTRY_ADDRESS_MUMBAI, registryABI.abi, new ethers.providers.JsonRpcProvider('https://rpc-mumbai.maticvigil.com/'));
 const registryMainnet = new ethers.Contract(REGISTRY_ADDRESS_MAINNET, registryABI.abi, new ethers.providers.JsonRpcProvider('https://rpc-mumbai.maticvigil.com/'));
@@ -75,7 +84,7 @@ registryMumbai.on('newSubRegistry', (newSubRegistryAddress) => {
 
         await client.set(`${to.toLowerCase().slice(2)}-${subRegistry.address.toLowerCase().slice(2)}`, JSON.stringify(recieverTokens));
 
-        if (from != '0x0000000000000000000000000000000000000000') {
+        if (from != ethers.constants.AddressZero) {
             let senderTokens = await client.get(`${from.toLowerCase().slice(2)}-${subRegistry.address.toLowerCase().slice(2)}`);
             senderTokens = JSON.parse(senderTokens);
 
@@ -91,7 +100,11 @@ registryMumbai.on('newSubRegistry', (newSubRegistryAddress) => {
     subRegistryContracts.push(subRegistry);
 })
 
-app.get('/tokens/:address', /*bruteforce.prevent,*/ async (req, res) => {
+app.get('/tokens/:address',(req, res, next) => {
+    if (!process.env.DEVELOPMENT) bruteforce.prevent(req,res);
+
+    return next();
+}, async (req, res) => {
     const { address } = req.params;
     const { network } = req.query;
     let data;
@@ -115,7 +128,11 @@ app.get('/tokens/:address', /*bruteforce.prevent,*/ async (req, res) => {
     res.send(myResponse);
 })
 
-app.get('/records/:address', async (req, res) => {
+app.get('/records/:address',(req, res, next) => {
+    if (!process.env.DEVELOPMENT) bruteforce.prevent(req,res);
+    
+    return next();
+}, async (req, res) => {
     const { address } = req.params;
     const { network } = req.query;
     let chain;
@@ -129,31 +146,7 @@ app.get('/records/:address', async (req, res) => {
     const response = await Moralis.EvmApi.events.getContractEvents({
         address: address,
         chain: chain,
-        abi: {
-            "anonymous": false,
-            "inputs": [
-                {
-                    "indexed": false,
-                    "internalType": "uint256",
-                    "name": "_type",
-                    "type": "uint256"
-                },
-                {
-                    "indexed": false,
-                    "internalType": "string",
-                    "name": "key",
-                    "type": "string"
-                },
-                {
-                    "indexed": false,
-                    "internalType": "bytes",
-                    "name": "value",
-                    "type": "bytes"
-                }
-            ],
-            "name": "RecordSet",
-            "type": "event"
-        },
+        abi: recordSetEventABI,
         topic: '0x9551980f56ab4a38eeda798fa201134d95d98db4d3ad60d8ce7b9a29f3681cb7'
     });
 
@@ -199,7 +192,7 @@ app.listen('8080', async () => {
 
             await client.set(`${to.toLowerCase().slice(2)}-${subRegistry.address.toLowerCase().slice(2)}`, JSON.stringify(recieverTokens));
 
-            if (from != '0x0000000000000000000000000000000000000000') {
+            if (from != ethers.constants.AddressZero) {
                 let senderTokens = await client.get(`${from.toLowerCase().slice(2)}-${subRegistry.address.toLowerCase().slice(2)}`);
                 senderTokens = JSON.parse(senderTokens);
 
@@ -218,31 +211,7 @@ app.listen('8080', async () => {
             address: subRegistryAddressesMumbai[i],
             chain: EvmChain.MUMBAI,
             fromBlock: nextBlock,
-            abi: {
-                "anonymous": false,
-                "inputs": [
-                    {
-                        "indexed": true,
-                        "internalType": "address",
-                        "name": "from",
-                        "type": "address"
-                    },
-                    {
-                        "indexed": true,
-                        "internalType": "address",
-                        "name": "to",
-                        "type": "address"
-                    },
-                    {
-                        "indexed": true,
-                        "internalType": "uint256",
-                        "name": "tokenId",
-                        "type": "uint256"
-                    }
-                ],
-                "name": "Transfer",
-                "type": "event"
-            },
+            abi: transferEventABI,
             topic: '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
         });
 
@@ -263,7 +232,7 @@ app.listen('8080', async () => {
 
                 await client.set(`${tmp[j].data.to.slice(2)}-${tmp[j].address.slice(2)}`, JSON.stringify(recieverTokens));
 
-                if (tmp[j].data.from != '0x0000000000000000000000000000000000000000') {
+                if (tmp[j].data.from != ethers.constants.AddressZero) {
                     let senderTokens = await client.get(`${tmp[j].data.from.toLowerCase().slice(2)}-${tmp[j].address.toLowerCase().slice(2)}`);
                     senderTokens = JSON.parse(senderTokens);
 
